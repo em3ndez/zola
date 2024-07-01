@@ -3,11 +3,11 @@
 title = "pico"
 description = "Clean and minimalistic dark theme"
 template = "theme.html"
-date = 2024-05-03T12:02:37-07:00
+date = 2024-07-01T05:58:26Z
 
 [extra]
-created = 2024-05-03T12:02:37-07:00
-updated = 2024-05-03T12:02:37-07:00
+created = 2024-07-01T05:58:26Z
+updated = 2024-07-01T05:58:26Z
 repository = "https://github.com/kuznetsov17/pico.git"
 homepage = "https://github.com/kuznetsov17/pico"
 minimum_version = "0.18.0"
