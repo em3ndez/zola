@@ -1,13 +1,15 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
-use libs::tera::{Map, Value};
 use serde::Deserialize;
+use tera::{Map, Value};
 use time::format_description::well_known::Rfc3339;
 use time::macros::{format_description, time};
 use time::{Date, OffsetDateTime, PrimitiveDateTime};
 
-use errors::{bail, Result};
-use utils::de::{fix_toml_dates, from_toml_datetime};
+use super::datetime::from_unknown_datetime;
+use errors::{Result, bail};
+
+use super::extra::{default_extra, deserialize_extra};
 
 use crate::front_matter::split::RawFrontMatter;
 
@@ -20,7 +22,7 @@ pub struct PageFrontMatter {
     /// Description in <meta> that appears when linked, e.g. on twitter
     pub description: Option<String>,
     /// Updated date
-    #[serde(default, deserialize_with = "from_toml_datetime")]
+    #[serde(default, deserialize_with = "from_unknown_datetime")]
     pub updated: Option<String>,
     /// Datetime content was last updated
     #[serde(default, skip_deserializing)]
@@ -29,7 +31,7 @@ pub struct PageFrontMatter {
     #[serde(default, skip_deserializing)]
     pub updated_datetime_tuple: Option<(i32, u8, u8)>,
     /// Date if we want to order pages (ie blog post)
-    #[serde(default, deserialize_with = "from_toml_datetime")]
+    #[serde(default, deserialize_with = "from_unknown_datetime")]
     pub date: Option<String>,
     /// Datetime content was created
     #[serde(default, skip_deserializing)]
@@ -39,6 +41,10 @@ pub struct PageFrontMatter {
     pub datetime_tuple: Option<(i32, u8, u8)>,
     /// Whether this page is a draft
     pub draft: bool,
+    /// Prevent generation of a folder for current page
+    /// Defaults to `true`
+    #[serde(skip_serializing)]
+    pub render: bool,
     /// The page slug. Will be used instead of the filename if present
     /// Can't be an empty string if present
     pub slug: Option<String>,
@@ -46,7 +52,7 @@ pub struct PageFrontMatter {
     /// otherwise is set after parsing front matter and sections
     /// Can't be an empty string if present
     pub path: Option<String>,
-    pub taxonomies: HashMap<String, Vec<String>>,
+    pub taxonomies: BTreeMap<String, Vec<String>>,
     /// Integer to use to order content. Highest is at the bottom, lowest first
     pub weight: Option<usize>,
     /// The authors of the page.
@@ -62,8 +68,16 @@ pub struct PageFrontMatter {
     /// Defaults to `true` but is only used if search if explicitly enabled in the config.
     #[serde(skip_serializing)]
     pub in_search_index: bool,
+    /// Whether the page is included in feeds (RSS/Atom)
+    /// Defaults to `true`
+    #[serde(skip_serializing)]
+    pub include_in_feeds: bool,
+    /// Whether to hide this page everywhere but still render it
+    #[serde(skip_serializing)]
+    pub hidden: Option<bool>,
     /// Any extra parameter present in the front matter
-    pub extra: Map<String, Value>,
+    #[serde(default = "default_extra", deserialize_with = "deserialize_extra")]
+    pub extra: Value,
 }
 
 /// Parse a string for a datetime coming from one of the supported TOML format
@@ -71,6 +85,7 @@ pub struct PageFrontMatter {
 /// 1. an offset datetime (plain RFC3339)
 /// 2. a local datetime (RFC3339 with timezone omitted)
 /// 3. a local date (YYYY-MM-DD).
+///
 /// This tries each in order.
 fn parse_datetime(d: &str) -> Option<OffsetDateTime> {
     OffsetDateTime::parse(d, &Rfc3339)
@@ -86,22 +101,17 @@ impl PageFrontMatter {
     pub fn parse(raw: &RawFrontMatter) -> Result<PageFrontMatter> {
         let mut f: PageFrontMatter = raw.deserialize()?;
 
-        if let Some(ref slug) = f.slug {
-            if slug.is_empty() {
-                bail!("`slug` can't be empty if present")
-            }
+        if let Some(ref slug) = f.slug
+            && slug.is_empty()
+        {
+            bail!("`slug` can't be empty if present")
         }
 
-        if let Some(ref path) = f.path {
-            if path.is_empty() {
-                bail!("`path` can't be empty if present")
-            }
+        if let Some(ref path) = f.path
+            && path.is_empty()
+        {
+            bail!("`path` can't be empty if present")
         }
-
-        f.extra = match fix_toml_dates(f.extra) {
-            Value::Object(o) => o,
-            _ => unreachable!("Got something other than a table in page extra"),
-        };
 
         f.date_to_datetime();
 
@@ -113,10 +123,10 @@ impl PageFrontMatter {
             }
         }
 
-        if let Some(ref date) = f.date {
-            if f.datetime.is_none() {
-                bail!("`date` could not be parsed: {}.", date);
-            }
+        if let Some(ref date) = f.date
+            && f.datetime.is_none()
+        {
+            bail!("`date` could not be parsed: {}.", date);
         }
 
         Ok(f)
@@ -142,6 +152,7 @@ impl Default for PageFrontMatter {
     fn default() -> PageFrontMatter {
         PageFrontMatter {
             in_search_index: true,
+            include_in_feeds: true,
             title: None,
             description: None,
             updated: None,
@@ -151,14 +162,16 @@ impl Default for PageFrontMatter {
             datetime: None,
             datetime_tuple: None,
             draft: false,
+            render: true,
             slug: None,
             path: None,
-            taxonomies: HashMap::new(),
+            taxonomies: BTreeMap::new(),
             weight: None,
             authors: Vec::new(),
             aliases: Vec::new(),
             template: None,
-            extra: Map::new(),
+            hidden: None,
+            extra: Value::from(Map::new()),
         }
     }
 }
@@ -167,7 +180,8 @@ impl Default for PageFrontMatter {
 mod tests {
     use crate::front_matter::page::PageFrontMatter;
     use crate::front_matter::split::RawFrontMatter;
-    use libs::tera::to_value;
+    use tera::Value;
+    use tera::value::Key;
     use test_case::test_case;
     use time::macros::datetime;
 
@@ -177,6 +191,26 @@ mod tests {
         let res = PageFrontMatter::parse(content);
         println!("{:?}", res);
         assert!(res.is_ok());
+    }
+
+    #[test]
+    fn include_in_feeds_defaults_to_true() {
+        let content = &RawFrontMatter::Toml(r#"title = "Hello""#);
+        let res = PageFrontMatter::parse(content).unwrap();
+        assert!(res.include_in_feeds);
+    }
+
+    #[test_case(&RawFrontMatter::Toml(r#"
+title = "Hello"
+include_in_feeds = false
+"#); "toml")]
+    #[test_case(&RawFrontMatter::Yaml(r#"
+title: Hello
+include_in_feeds: false
+"#); "yaml")]
+    fn can_disable_include_in_feeds(content: &RawFrontMatter) {
+        let res = PageFrontMatter::parse(content).unwrap();
+        assert!(!res.include_in_feeds);
     }
 
     #[test_case(&RawFrontMatter::Toml(r#"
@@ -328,6 +362,36 @@ date: 2002-10-02T15:00:00.123456Z
         assert_eq!(res.datetime.unwrap(), datetime!(2002 - 10 - 02 15:00:00.123456 UTC));
     }
 
+    #[test_case(&RawFrontMatter::Yaml(r#"
+title: Hello
+description: hey there
+date: 2001-12-15T02:59:43.1Z
+"#); "canonical")]
+    #[test_case(&RawFrontMatter::Yaml(r#"
+title: Hello
+description: hey there
+date: 2001-12-14t21:59:43.10-05:00
+"#); "iso8601")]
+    #[test_case(&RawFrontMatter::Yaml(r#"
+title: Hello
+description: hey there
+date: 2001-12-14 21:59:43.10 -5
+"#); "space separated")]
+    #[test_case(&RawFrontMatter::Yaml(r#"
+title: Hello
+description: hey there
+date: 2001-12-15 2:59:43.10
+"#); "no time zone")]
+    #[test_case(&RawFrontMatter::Yaml(r#"
+title: Hello
+description: hey there
+date: 2001-12-15
+"#); "date only")]
+    fn can_parse_yaml_dates(content: &RawFrontMatter) {
+        let res = PageFrontMatter::parse(content).unwrap();
+        assert!(res.datetime.is_some());
+    }
+
     #[test_case(&RawFrontMatter::Toml(r#"
 title = "Hello"
 description = "hey there"
@@ -408,7 +472,10 @@ extra:
         let res = PageFrontMatter::parse(content);
         println!("{:?}", res);
         assert!(res.is_ok());
-        assert_eq!(res.unwrap().extra["some-date"], to_value("2002-11-01").unwrap());
+        assert_eq!(
+            res.unwrap().extra.as_map().unwrap().get(&Key::from("some-date")).unwrap(),
+            &Value::from("2002-11-01")
+        );
     }
 
     #[test_case(&RawFrontMatter::Toml(r#"
@@ -430,7 +497,19 @@ extra:
         let res = PageFrontMatter::parse(content);
         println!("{:?}", res);
         assert!(res.is_ok());
-        assert_eq!(res.unwrap().extra["something"]["some-date"], to_value("2002-11-01").unwrap());
+        assert_eq!(
+            res.unwrap()
+                .extra
+                .as_map()
+                .unwrap()
+                .get(&Key::from("something"))
+                .unwrap()
+                .as_map()
+                .unwrap()
+                .get(&Key::from("some-date"))
+                .unwrap(),
+            &Value::from("2002-11-01")
+        );
     }
 
     #[test_case(&RawFrontMatter::Toml(r#"
@@ -457,7 +536,21 @@ extra:
         let res = PageFrontMatter::parse(content);
         println!("{:?}", res);
         assert!(res.is_ok());
-        assert_eq!(res.unwrap().extra["questions"][0]["date"], to_value("2020-05-03").unwrap());
+        assert_eq!(
+            res.unwrap()
+                .extra
+                .as_map()
+                .unwrap()
+                .get(&Key::from("questions"))
+                .unwrap()
+                .as_array()
+                .unwrap()[0]
+                .as_map()
+                .unwrap()
+                .get(&Key::from("date"))
+                .unwrap(),
+            &Value::from("2020-05-03")
+        );
     }
 
     #[test_case(&RawFrontMatter::Toml(r#"

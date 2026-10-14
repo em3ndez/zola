@@ -1,9 +1,9 @@
 use std::cmp::Ordering;
 use std::path::PathBuf;
 
-use crate::{Page, SortBy};
-use libs::lexical_sort::natural_lexical_cmp;
-use libs::rayon::prelude::*;
+use crate::{Page, Section, SortBy};
+use lexical_sort::natural_lexical_cmp;
+use rayon::prelude::*;
 
 /// Sort by the field picked by the function.
 /// The pages permalinks are used to break the ties
@@ -17,6 +17,7 @@ pub fn sort_pages(pages: &[&Page], sort_by: SortBy) -> (Vec<PathBuf>, Vec<PathBu
             SortBy::Title | SortBy::TitleBytes => page.meta.title.is_some(),
             SortBy::Weight => page.meta.weight.is_some(),
             SortBy::Slug => true,
+            SortBy::Permalink => true,
             SortBy::None => unreachable!(),
         });
 
@@ -34,11 +35,17 @@ pub fn sort_pages(pages: &[&Page], sort_by: SortBy) -> (Vec<PathBuf>, Vec<PathBu
             }
             SortBy::Weight => a.meta.weight.unwrap().cmp(&b.meta.weight.unwrap()),
             SortBy::Slug => natural_lexical_cmp(&a.slug, &b.slug),
+            SortBy::Permalink => a.permalink.cmp(&b.permalink),
             SortBy::None => unreachable!(),
         };
 
         if ord == Ordering::Equal {
-            a.permalink.cmp(&b.permalink)
+            // https://github.com/getzola/zola/issues/1975
+            // Keep the same order as primary sort for breaking the ties
+            match sort_by {
+                SortBy::Date | SortBy::UpdateDate => b.permalink.cmp(&a.permalink),
+                _ => a.permalink.cmp(&b.permalink),
+            }
         } else {
             ord
         }
@@ -47,6 +54,41 @@ pub fn sort_pages(pages: &[&Page], sort_by: SortBy) -> (Vec<PathBuf>, Vec<PathBu
     (
         can_be_sorted.iter().map(|p| p.file.path.clone()).collect(),
         cannot_be_sorted.iter().map(|p: &&Page| p.file.path.clone()).collect(),
+    )
+}
+
+/// Sort by the field picked by the function.
+/// The sections permalinks are used to break the ties.
+pub fn sort_sections(sections: &[&Section], sort_by: SortBy) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let sort_by = match sort_by {
+        SortBy::Title | SortBy::TitleBytes | SortBy::Permalink => sort_by,
+        _ => SortBy::Weight,
+    };
+
+    let (mut can_be_sorted, cannot_be_sorted): (Vec<&Section>, Vec<_>) =
+        sections.par_iter().partition(|section| match sort_by {
+            SortBy::Title | SortBy::TitleBytes => section.meta.title.is_some(),
+            _ => true,
+        });
+
+    can_be_sorted.par_sort_unstable_by(|a, b| {
+        let ord = match sort_by {
+            SortBy::Title => {
+                natural_lexical_cmp(a.meta.title.as_ref().unwrap(), b.meta.title.as_ref().unwrap())
+            }
+            SortBy::TitleBytes => {
+                a.meta.title.as_ref().unwrap().cmp(b.meta.title.as_ref().unwrap())
+            }
+            SortBy::Permalink => a.permalink.cmp(&b.permalink),
+            _ => a.meta.weight.cmp(&b.meta.weight),
+        };
+
+        if ord == Ordering::Equal { a.permalink.cmp(&b.permalink) } else { ord }
+    });
+
+    (
+        can_be_sorted.iter().map(|s| s.file.path.clone()).collect(),
+        cannot_be_sorted.iter().map(|s: &&Section| s.file.path.clone()).collect(),
     )
 }
 
@@ -107,6 +149,21 @@ mod tests {
         assert_eq!(pages[1], page3.file.path);
         assert_eq!(pages[2], page1.file.path);
         assert_eq!(ignored_pages.len(), 0);
+    }
+
+    // https://github.com/getzola/zola/issues/1975
+    #[test]
+    fn date_ties_break_by_permalink_descending() {
+        let older = create_page_with_date("2024-08-23", None);
+        let mut a = create_page_with_date("2024-08-24", None);
+        let mut b = create_page_with_date("2024-08-24", None);
+        a.permalink = "https://example.com/topic-01/".to_string();
+        a.file.path = PathBuf::from("content/topic-01.md");
+        b.permalink = "https://example.com/topic-02/".to_string();
+        b.file.path = PathBuf::from("content/topic-02.md");
+
+        let (pages, _) = sort_pages(&[&a, &b, &older], SortBy::Date);
+        assert_eq!(pages, vec![b.file.path.clone(), a.file.path.clone(), older.file.path.clone()]);
     }
 
     #[test]

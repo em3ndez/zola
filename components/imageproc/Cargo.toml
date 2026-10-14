@@ -1,16 +1,24 @@
 [package]
 name = "imageproc"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
-kamadak-exif = "0.5.4"
+serde = { workspace = true }
+fs-err = { workspace = true }
+kamadak-exif = "0.6"
+tempfile = "3"
+ahash = { workspace = true }
+avif-parse = { workspace = true }
+fast_image_resize = { workspace = true }
+image = { workspace = true }
+log = { workspace = true }
+rayon = { workspace = true }
+svg_metadata = { workspace = true }
+webp = { workspace = true }
 
-errors = { path = "../errors" }
-utils = { path = "../utils" }
-config = { path = "../config" }
-libs = { path = "../libs" }
+errors = { workspace = true }
+utils = { workspace = true }
+config = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3"

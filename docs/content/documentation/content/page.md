@@ -17,9 +17,11 @@ If the file is given any name _other_ than `index.md` or `_index.md`, then it wi
 create a page with that name (without the `.md`). For example, naming a file in the root of your
 content directory `about.md` would create a page at `[base_url]/about`.
 
-Another exception to this rule is that a filename starting with a datetime (YYYY-mm-dd or [an RFC3339 datetime](https://www.ietf.org/rfc/rfc3339.txt)) followed by
-an underscore (`_`) or a dash (`-`) will use that date as the page date, unless already set
-in the front matter. The page name will be anything after `_`/`-`, so the file `2018-10-10-hello-world.md` will
+Another exception to this rule is that a filename starting with a datetime (YYYY-mm-dd or [an RFC3339 datetime](https://www.ietf.org/rfc/rfc3339.txt))
+will use that date as the page date, unless already set
+in the front matter. A datetime filename can optionally be followed by an underscore (`_`) or a dash (`-`), and slug.
+The page name will be either the datetime or anything after `_`/`-`,
+so the file `2018-10-10.md` will be available at `[base_url]/2018-10-10`, and `2018-10-10-hello-world.md` will
 be available at `[base_url]/hello-world`. Note that the full RFC3339 datetime contains colons, which is not a valid
 character in a filename on Windows.
 This behavior can be disabled by setting `slugify.paths_keep_dates` to `true` (the default is `false`). Note that a `_` separating the date would be slugified into a `-` with the default value for `slugify.paths` of `"on"`.
@@ -98,11 +100,11 @@ description = ""
 # If the section variable `sort_by` is set to `date`, then any page that lacks a `date`
 # will not be rendered.
 # Setting this overrides a date set in the filename.
-date =
+# date =
 
 # The last updated date of the post, if different from the date.
 # Same format as `date`.
-updated =
+# updated =
 
 # The weight as defined on the Section page of the documentation.
 # If the section variable `sort_by` is set to `weight`, then any page that lacks a `weight`
@@ -111,6 +113,9 @@ weight = 0
 
 # A draft page is only loaded if the `--drafts` flag is passed to `zola build`, `zola serve` or `zola check`.
 draft = false
+
+# When set to "false" Zola will not create a separate folder with index.html inside for this page.
+render = false
 
 # If set, this slug will be used instead of the filename to make the URL.
 # The section path will still be used.
@@ -135,11 +140,18 @@ authors = []
 # hasn't set `in_search_index` to "false" in its front matter.
 in_search_index = true
 
+# When set to "false", the page will be excluded from all feeds (site, section, and taxonomy).
+# Defaults to "true".
+include_in_feeds = true
+
 # Template to use to render this page.
 template = "page.html"
 
+# When set to `true`, the page will be rendered but will not be included in a section pages/sitemap/search/feeds/etc
+hidden = false
+
 # The taxonomies for this page. The keys need to be the same as the taxonomy
-# names configured in `config.toml` and the values are an array of String objects. For example,
+# names configured in `zola.toml` and the values are an array of String objects. For example,
 # tags = ["rust", "web"].
 [taxonomies]
 
@@ -152,10 +164,22 @@ template = "page.html"
 You can ask Zola to create a summary if, for example, you only want to show the first
 paragraph of the page content in a list.
 
-To do so, add <code>&lt;!-- more --&gt;</code> in your content at the point
+To do so, add `<!-- more -->` in your content at the point
 where you want the summary to end. The content up to that point will be
 available separately in the
 [template](@/documentation/templates/pages-sections.md#page-variables) via `page.summary`.
 
 A span element in this position with a `continue-reading` id is created, so you can link directly to it if needed. For example:
 `<a href="{{ page.permalink }}#continue-reading">Continue Reading</a>`.
+
+The `<!-- more -->` marker can also exist in the middle of a line, and it will ensure that this does not emit unclosed HTML tags.
+You can use the `summary-cutoff.html` to show text after the summary (but before these closing tags) based
+upon the summary before the cutoff.
+
+By default, it will show an ellipsis (…) regardless of the content of the summary, but you can use a different template if you want to only show an ellipsis if the summary does not end in any punctuation:
+
+```jinja
+{% raw -%}
+{% if summary is matching(pat="\PP$") %}&hellip;{% endif %}
+{%- endraw %}
+```

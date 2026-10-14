@@ -1,54 +1,55 @@
 mod common;
 
-use std::collections::HashMap;
-use std::env;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use common::{build_site, build_site_with_setup};
+use ahash::AHashMap;
+use common::{build_site, build_site_with_setup, test_site_path};
 use config::TaxonomyConfig;
 use content::Page;
-use libs::ahash::AHashMap;
-use site::sitemap;
 use site::Site;
+use site::sitemap;
+use tera::Value;
+use tera::value::Key;
+use utils::types::InsertAnchor;
 
 #[test]
 fn can_parse_site() {
-    let mut path = env::current_dir().unwrap().parent().unwrap().parent().unwrap().to_path_buf();
-    path.push("test_site");
+    let path = test_site_path("test_site");
     let config_file = path.join("config.toml");
     let mut site = Site::new(&path, &config_file).unwrap();
     site.load().unwrap();
-    let library = site.library.read().unwrap();
 
     // Correct number of pages (sections do not count as pages, draft are ignored)
-    assert_eq!(library.pages.len(), 35);
+    assert_eq!(site.library.pages.len(), 41);
     let posts_path = path.join("content").join("posts");
 
     // Make sure the page with a url doesn't have any sections
-    let url_post = library.pages.get(&posts_path.join("fixed-url.md")).unwrap();
+    let url_post = site.library.pages.get(&posts_path.join("fixed-url.md")).unwrap();
     assert_eq!(url_post.path, "/a-fixed-url/");
 
     // Make sure the article in a folder with only asset doesn't get counted as a section
     let asset_folder_post =
-        library.pages.get(&posts_path.join("with-assets").join("index.md")).unwrap();
+        site.library.pages.get(&posts_path.join("with-assets").join("index.md")).unwrap();
     assert_eq!(asset_folder_post.file.components, vec!["posts".to_string()]);
 
     // That we have the right number of sections
-    assert_eq!(library.sections.len(), 13);
+    assert_eq!(site.library.sections.len(), 16);
 
     // And that the sections are correct
-    let index_section = library.sections.get(&path.join("content").join("_index.md")).unwrap();
+    let index_section = site.library.sections.get(&path.join("content").join("_index.md")).unwrap();
     assert_eq!(index_section.subsections.len(), 5);
     assert_eq!(index_section.pages.len(), 5);
     assert!(index_section.ancestors.is_empty());
 
-    let posts_section = library.sections.get(&posts_path.join("_index.md")).unwrap();
+    let posts_section = site.library.sections.get(&posts_path.join("_index.md")).unwrap();
     assert_eq!(posts_section.subsections.len(), 2);
     assert_eq!(posts_section.pages.len(), 10); // 11 with 1 draft == 10
     assert_eq!(posts_section.ancestors, vec![index_section.file.relative.clone()]);
 
     // Make sure we remove all the pwd + content from the sections
-    let basic = library.pages.get(&posts_path.join("simple.md")).unwrap();
+    let basic = site.library.pages.get(&posts_path.join("simple.md")).unwrap();
     assert_eq!(basic.file.components, vec!["posts".to_string()]);
     assert_eq!(
         basic.ancestors,
@@ -56,15 +57,16 @@ fn can_parse_site() {
     );
 
     let tutorials_section =
-        library.sections.get(&posts_path.join("tutorials").join("_index.md")).unwrap();
+        site.library.sections.get(&posts_path.join("tutorials").join("_index.md")).unwrap();
     assert_eq!(tutorials_section.subsections.len(), 2);
-    let sub1 = &library.sections[&tutorials_section.subsections[0]];
-    let sub2 = &library.sections[&tutorials_section.subsections[1]];
+    let sub1 = &site.library.sections[&tutorials_section.subsections[0]];
+    let sub2 = &site.library.sections[&tutorials_section.subsections[1]];
     assert_eq!(sub1.clone().meta.title.unwrap(), "Programming");
     assert_eq!(sub2.clone().meta.title.unwrap(), "DevOps");
     assert_eq!(tutorials_section.pages.len(), 0);
 
-    let devops_section = library
+    let devops_section = site
+        .library
         .sections
         .get(&posts_path.join("tutorials").join("devops").join("_index.md"))
         .unwrap();
@@ -79,7 +81,8 @@ fn can_parse_site() {
         ]
     );
 
-    let prog_section = library
+    let prog_section = site
+        .library
         .sections
         .get(&posts_path.join("tutorials").join("programming").join("_index.md"))
         .unwrap();
@@ -89,15 +92,24 @@ fn can_parse_site() {
     // Testing extra variables in sections & sitemaps
     // Regression test for #https://github.com/getzola/zola/issues/842
     assert_eq!(
-        prog_section.meta.extra.get("we_have_extra").and_then(|s| s.as_str()),
+        prog_section
+            .meta
+            .extra
+            .as_map()
+            .unwrap()
+            .get(&Key::Str("we_have_extra"))
+            .and_then(Value::as_str),
         Some("variables")
     );
-    let sitemap_entries = sitemap::find_entries(&library, &site.taxonomies[..], &site.config);
+    let sitemap_entries = sitemap::find_entries(&site.library, &site.taxonomies[..], &site.config);
     let sitemap_entry = sitemap_entries
         .iter()
         .find(|e| e.permalink.ends_with("tutorials/programming/"))
         .expect("expected to find programming section in sitemap");
-    assert_eq!(Some(&prog_section.meta.extra), sitemap_entry.extra);
+    assert_eq!(Some(prog_section.meta.extra.clone()), sitemap_entry.extra);
+
+    // https://github.com/getzola/zola/issues/1596
+    assert!(!site.permalinks.contains_key("posts/render.md"));
 }
 
 #[test]
@@ -128,13 +140,27 @@ fn can_build_site_without_live_reload() {
     assert!(file_contains!(public, "index.html", "My Integration Testing site"));
 
     assert!(file_exists!(public, "posts/python/index.html"));
-    // Shortcodes work
+
     assert!(file_contains!(public, "posts/python/index.html", "Basic shortcode"));
     assert!(file_contains!(public, "posts/python/index.html", "Arrrh Bob"));
     assert!(file_contains!(public, "posts/python/index.html", "Arrrh Bob_Sponge"));
+    assert!(file_contains!(
+        public,
+        "posts/python/index.html",
+        "https://replace-this-with-your-url.com/categories/a-category/"
+    ));
+    assert!(!file_contains!(public, "posts/python/index.html", "SHOULDNOTAPPEAR"));
+    assert!(!file_contains!(public, "posts/python/index.html", "DESCRIPTION"));
+
     assert!(file_exists!(public, "posts/tutorials/devops/nix/index.html"));
     assert!(file_exists!(public, "posts/with-assets/index.html"));
     assert!(file_exists!(public, "posts/no-section/simple/index.html"));
+
+    // "render = false" should not generate an index.html
+    assert!(!file_exists!(public, "posts/render/index.html"));
+
+    assert!(file_exists!(public, "posts/2018/asset.txt"));
+    assert!(file_exists!(public, "posts/tutorials/devops/asset.txt"));
 
     // Sections
     assert!(file_exists!(public, "posts/index.html"));
@@ -156,6 +182,13 @@ fn can_build_site_without_live_reload() {
     assert!(file_exists!(public, "an-old-url/old-page/index.html"));
     assert!(file_contains!(public, "an-old-url/old-page/index.html", "something-else"));
     assert!(file_contains!(public, "another-old-url/index.html", "posts/"));
+
+    // page aliases are exposed to templates
+    assert!(file_contains!(
+        public,
+        "posts/something-else/index.html",
+        "Page aliases: /an-old-url/old-page,/an-old-url/an-old-alias.html"
+    ));
 
     // html aliases work
     assert!(file_exists!(public, "an-old-url/an-old-alias.html"));
@@ -233,7 +266,9 @@ fn can_build_site_without_live_reload() {
 #[test]
 fn can_build_site_with_live_reload_and_drafts() {
     let (site, _tmp_dir, public) = build_site_with_setup("test_site", |mut site| {
-        site.enable_live_reload(1000);
+        use std::net::IpAddr;
+        use std::str::FromStr;
+        site.enable_live_reload(IpAddr::from_str("127.0.0.1").unwrap(), 1000);
         site.include_drafts();
         (site, true)
     });
@@ -278,8 +313,7 @@ fn can_build_site_with_live_reload_and_drafts() {
     assert!(file_contains!(public, "sitemap.xml", "draft"));
 
     // drafted sections are included
-    let library = site.library.read().unwrap();
-    assert_eq!(library.sections.len(), 15);
+    assert_eq!(site.library.sections.len(), 18);
 
     assert!(file_exists!(public, "secret_section/index.html"));
     assert!(file_exists!(public, "secret_section/draft-page/index.html"));
@@ -292,13 +326,13 @@ fn can_build_site_with_taxonomies() {
     let (site, _tmp_dir, public) = build_site_with_setup("test_site", |mut site| {
         site.load().unwrap();
         {
-            let library = &mut *site.library.write().unwrap();
+            let library = Arc::make_mut(&mut site.library);
             let mut pages = vec![];
 
             let pages_data = std::mem::replace(&mut library.pages, AHashMap::new());
             for (i, (_, mut page)) in pages_data.into_iter().enumerate() {
                 page.meta.taxonomies = {
-                    let mut taxonomies = HashMap::new();
+                    let mut taxonomies = BTreeMap::new();
                     taxonomies.insert(
                         "categories".to_string(),
                         vec![if i % 2 == 0 { "A" } else { "B" }.to_string()],
@@ -312,6 +346,7 @@ fn can_build_site_with_taxonomies() {
             }
         }
         site.populate_taxonomies().unwrap();
+        site.rebuild_cache();
         (site, false)
     });
 
@@ -375,11 +410,36 @@ fn can_build_site_and_insert_anchor_links() {
 }
 
 #[test]
+fn can_build_site_insert_anchor_links_none_by_default() {
+    let (_, _tmp_dir, public) = build_site("test_site");
+
+    assert!(Path::new(&public).exists());
+    // anchor link not inserted
+    assert!(file_contains!(public, "index.html", r#"<h1 id="heading-1">Heading 1</h1>"#));
+}
+
+#[test]
+fn can_build_site_and_insert_anchor_links_global_config() {
+    let (_, _tmp_dir, public) = build_site_with_setup("test_site", |mut site| {
+        site.config.markdown.insert_anchor_links = InsertAnchor::Right;
+        (site, true)
+    });
+
+    assert!(Path::new(&public).exists());
+    // anchor link inserted
+    assert!(file_contains!(
+        public,
+        "index.html",
+        r##"<h1 id="heading-1">Heading 1<a class="zola-anchor" href="#heading-1" aria-label="Anchor link for: heading-1">🔗</a></h1>"##
+    ));
+}
+
+#[test]
 fn can_build_site_with_pagination_for_section() {
     let (_, _tmp_dir, public) = build_site_with_setup("test_site", |mut site| {
         site.load().unwrap();
         {
-            let mut library = site.library.write().unwrap();
+            let library = Arc::make_mut(&mut site.library);
             for (_, section) in library.sections.iter_mut() {
                 if section.is_index() {
                     continue;
@@ -408,6 +468,7 @@ fn can_build_site_with_pagination_for_section() {
     // even if there is no pages, only the section!
     assert!(file_exists!(public, "paginated/page/1/index.html"));
     assert!(file_exists!(public, "paginated/index.html"));
+    assert!(file_exists!(public, "paginated/asset.txt"));
     // should redirect to posts/
     assert!(file_contains!(
         public,
@@ -505,7 +566,7 @@ fn can_build_site_with_pagination_for_index() {
     let (_, _tmp_dir, public) = build_site_with_setup("test_site", |mut site| {
         site.load().unwrap();
         {
-            let mut library = site.library.write().unwrap();
+            let library = Arc::make_mut(&mut site.library);
             {
                 let index = library
                     .sections
@@ -571,6 +632,7 @@ fn can_build_site_with_pagination_for_index() {
 
 #[test]
 fn can_build_site_with_pagination_for_taxonomy() {
+    let mut nb_a_pages = 0;
     let (_, _tmp_dir, public) = build_site_with_setup("test_site", |mut site| {
         site.config.languages.get_mut("en").unwrap().taxonomies.push(TaxonomyConfig {
             name: "tags".to_string(),
@@ -582,13 +644,17 @@ fn can_build_site_with_pagination_for_taxonomy() {
         });
         site.load().unwrap();
         {
-            let library = &mut *site.library.write().unwrap();
+            let library = Arc::make_mut(&mut site.library);
             let mut pages = vec![];
 
             let pages_data = std::mem::replace(&mut library.pages, AHashMap::new());
             for (i, (_, mut page)) in pages_data.into_iter().enumerate() {
+                // Discard not rendered pages and hidden ones
+                if i % 2 == 0 && page.meta.render && !page.hidden {
+                    nb_a_pages += 1;
+                }
                 page.meta.taxonomies = {
-                    let mut taxonomies = HashMap::new();
+                    let mut taxonomies = BTreeMap::new();
                     taxonomies.insert(
                         "tags".to_string(),
                         vec![if i % 2 == 0 { "A" } else { "B" }.to_string()],
@@ -602,9 +668,11 @@ fn can_build_site_with_pagination_for_taxonomy() {
             }
         }
         site.populate_taxonomies().unwrap();
+        site.rebuild_cache();
         (site, false)
     });
-
+    let nb_a_pagers: usize =
+        if nb_a_pages % 2 == 0 { nb_a_pages / 2 } else { (nb_a_pages / 2) + 1 };
     assert!(&public.exists());
 
     assert!(file_exists!(public, "index.html"));
@@ -632,7 +700,7 @@ fn can_build_site_with_pagination_for_taxonomy() {
         "tags/a/page/1/index.html",
         "http-equiv=\"refresh\" content=\"0; url=https://replace-this-with-your-url.com/tags/a/\""
     ));
-    assert!(file_contains!(public, "tags/a/index.html", "Num pagers: 9"));
+    assert!(file_contains!(public, "tags/a/index.html", &format!("Num pagers: {nb_a_pagers}")));
     assert!(file_contains!(public, "tags/a/index.html", "Page size: 2"));
     assert!(file_contains!(public, "tags/a/index.html", "Current index: 1"));
     assert!(!file_contains!(public, "tags/a/index.html", "has_prev"));
@@ -642,11 +710,13 @@ fn can_build_site_with_pagination_for_taxonomy() {
         "tags/a/index.html",
         "First: https://replace-this-with-your-url.com/tags/a/"
     ));
+
     assert!(file_contains!(
         public,
         "tags/a/index.html",
-        "Last: https://replace-this-with-your-url.com/tags/a/page/9/"
+        &format!("Last: https://replace-this-with-your-url.com/tags/a/page/{nb_a_pagers}/")
     ));
+
     assert!(!file_contains!(public, "tags/a/index.html", "has_prev"));
 
     // sitemap contains the pager pages
@@ -670,7 +740,6 @@ fn can_build_feeds() {
     assert!(file_exists!(public, "atom.xml"));
     // latest article is posts/extra-syntax.md
     assert!(file_contains!(public, "atom.xml", "Extra Syntax"));
-    // Next is posts/simple.md
     assert!(file_contains!(public, "atom.xml", "Simple article with shortcodes"));
 
     // Test section feeds
@@ -700,6 +769,47 @@ fn can_build_search_index() {
 }
 
 #[test]
+fn can_hide_pages_and_sections() {
+    let (_, _tmp_dir, public) = build_site_with_setup("test_site", |mut site| {
+        site.config.build_search_index = true;
+        (site, true)
+    });
+
+    // Hidden content is still rendered at its URL
+    assert!(file_exists!(public, "hidden-section/index.html"));
+    assert!(file_exists!(public, "hidden-section/first/index.html"));
+    assert!(file_exists!(public, "hidden-section/inner/index.html"));
+    assert!(file_exists!(public, "hidden-section/inner/deep/index.html"));
+    assert!(file_exists!(public, "posts/hidden/index.html"));
+    assert!(file_exists!(public, "hidden-section/unhidden/index.html"));
+    assert!(file_exists!(public, "hidden-section/visible/index.html"));
+    assert!(file_exists!(public, "hidden-section/visible/shown/index.html"));
+    // But not in the sitemap
+    assert!(!file_contains!(public, "sitemap.xml", "hidden-section/</loc>"));
+    assert!(!file_contains!(public, "sitemap.xml", "hidden-section/first/</loc>"));
+    assert!(!file_contains!(public, "sitemap.xml", "hidden-section/inner/</loc>"));
+    assert!(!file_contains!(public, "sitemap.xml", "hidden-section/inner/deep/</loc>"));
+    assert!(!file_contains!(public, "sitemap.xml", "posts/hidden/</loc>"));
+    // Or the search
+    assert!(!file_contains!(public, "search_index.en.js", "First hidden page"));
+    assert!(!file_contains!(public, "search_index.en.js", "Deep hidden page"));
+    assert!(!file_contains!(public, "search_index.en.js", "Hidden post"));
+    // Or the feeds
+    assert!(!file_contains!(public, "atom.xml", "hidden-section/first/"));
+    assert!(!file_contains!(public, "atom.xml", "posts/hidden/"));
+    // A taxonomy term used only by hidden pages is not rendered
+    assert!(!file_exists!(public, "categories/hidden-category/index.html"));
+
+    // Things explicitly hidden = false behave normally
+    assert!(file_contains!(public, "sitemap.xml", "hidden-section/unhidden/</loc>"));
+    assert!(file_contains!(public, "sitemap.xml", "hidden-section/visible/</loc>"));
+    assert!(file_contains!(public, "sitemap.xml", "hidden-section/visible/shown/</loc>"));
+    assert!(file_contains!(public, "atom.xml", "hidden-section/unhidden/"));
+    assert!(file_contains!(public, "search_index.en.js", "Unhidden page"));
+    assert!(file_contains!(public, "search_index.en.js", "Shown page"));
+}
+
+#[test]
 fn can_build_with_extra_syntaxes() {
     let (_, _tmp_dir, public) = build_site("test_site");
 
@@ -710,44 +820,48 @@ fn can_build_with_extra_syntaxes() {
 
 #[test]
 fn can_apply_page_templates() {
-    let mut path = env::current_dir().unwrap().parent().unwrap().parent().unwrap().to_path_buf();
-    path.push("test_site");
+    let path = test_site_path("test_site");
     let config_file = path.join("config.toml");
     let mut site = Site::new(&path, &config_file).unwrap();
     site.load().unwrap();
 
     let template_path = path.join("content").join("applying_page_template");
-    let library = site.library.read().unwrap();
 
-    let template_section = library.sections.get(&template_path.join("_index.md")).unwrap();
+    let template_section = site.library.sections.get(&template_path.join("_index.md")).unwrap();
     assert_eq!(template_section.subsections.len(), 2);
     assert_eq!(template_section.pages.len(), 2);
 
-    let from_section_config = &library.pages[&template_section.pages[0]];
+    let from_section_config = &site.library.pages[&template_section.pages[0]];
     assert_eq!(from_section_config.meta.template, Some("page_template.html".into()));
     assert_eq!(from_section_config.meta.title, Some("From section config".into()));
 
-    let override_page_template = &library.pages[&template_section.pages[1]];
+    let override_page_template = &site.library.pages[&template_section.pages[1]];
     assert_eq!(override_page_template.meta.template, Some("page_template_override.html".into()));
     assert_eq!(override_page_template.meta.title, Some("Override".into()));
 
     // It should have applied recursively as well
-    let another_section =
-        library.sections.get(&template_path.join("another_section").join("_index.md")).unwrap();
+    let another_section = site
+        .library
+        .sections
+        .get(&template_path.join("another_section").join("_index.md"))
+        .unwrap();
     assert_eq!(another_section.subsections.len(), 0);
     assert_eq!(another_section.pages.len(), 1);
 
-    let changed_recursively = &library.pages[&another_section.pages[0]];
+    let changed_recursively = &site.library.pages[&another_section.pages[0]];
     assert_eq!(changed_recursively.meta.template, Some("page_template.html".into()));
     assert_eq!(changed_recursively.meta.title, Some("Changed recursively".into()));
 
     // But it should not have override a children page_template
-    let yet_another_section =
-        library.sections.get(&template_path.join("yet_another_section").join("_index.md")).unwrap();
+    let yet_another_section = site
+        .library
+        .sections
+        .get(&template_path.join("yet_another_section").join("_index.md"))
+        .unwrap();
     assert_eq!(yet_another_section.subsections.len(), 0);
     assert_eq!(yet_another_section.pages.len(), 1);
 
-    let child = &library.pages[&yet_another_section.pages[0]];
+    let child = &site.library.pages[&yet_another_section.pages[0]];
     assert_eq!(child.meta.template, Some("page_template_child.html".into()));
     assert_eq!(child.meta.title, Some("Local section override".into()));
 }
@@ -786,10 +900,33 @@ fn can_ignore_markdown_content() {
 }
 
 #[test]
+fn can_resolve_colocated_assets_with_internal_links() {
+    let (_, _tmp_dir, public) = build_site("test_site");
+    assert!(file_contains!(
+        public,
+        "posts/with-assets/index.html",
+        "href=\"https://replace-this-with-your-url.com/posts/with-assets/zola.png\""
+    ));
+    assert!(file_contains!(
+        public,
+        "posts/with-assets/index.html",
+        "src=\"https://replace-this-with-your-url.com/posts/with-assets/zola.png\""
+    ));
+    assert!(file_contains!(
+        public,
+        "posts/with-assets/index.html",
+        "get_url asset: https://replace-this-with-your-url.com/posts/with-assets/zola.png"
+    ));
+}
+
+#[test]
 fn can_cachebust_static_files() {
     let (_, _tmp_dir, public) = build_site("test_site");
-    assert!(file_contains!(public, "index.html",
-        "<link href=\"https://replace-this-with-your-url.com/site.css?h=83bd983e8899946ee33d\" rel=\"stylesheet\">"));
+    assert!(file_contains!(
+        public,
+        "index.html",
+        "<link href=\"https://replace-this-with-your-url.com/site.css?h=83bd983e8899946ee33d\" rel=\"stylesheet\">"
+    ));
 }
 
 #[test]
@@ -817,7 +954,11 @@ fn can_check_site() {
     );
     assert_eq!(
         site.config.link_checker.skip_prefixes,
-        vec!["http://[2001:db8::]/", "http://invaliddomain"]
+        vec![
+            "http://[2001:db8::]/",
+            "http://invaliddomain",
+            "https://github.com/rust-lang/rust/blob/"
+        ]
     );
 
     site.config.enable_check_mode();
@@ -849,27 +990,54 @@ fn panics_on_invalid_external_domain() {
 }
 
 #[test]
+fn external_links_ignored_on_check() {
+    let (mut site, _tmp_dir, _public) = build_site("test_site");
+
+    // remove the invalid domain skip prefix
+    let i = site
+        .config
+        .link_checker
+        .skip_prefixes
+        .iter()
+        .position(|prefix| prefix == "http://invaliddomain")
+        .unwrap();
+    site.config.link_checker.skip_prefixes.remove(i);
+
+    // confirm the invalid domain skip prefix was removed
+    assert_eq!(
+        site.config.link_checker.skip_prefixes,
+        vec!["http://[2001:db8::]/", "https://github.com/rust-lang/rust/blob/"]
+    );
+
+    // set a flag to skip external links check
+    site.skip_external_links_check();
+
+    // check the test site with all external links (including invalid domain) skipped, which should
+    // not cause a panic
+    site.config.enable_check_mode();
+    site.load().expect("link check test_site");
+}
+
+#[test]
 fn can_find_site_and_page_authors() {
-    let mut path = env::current_dir().unwrap().parent().unwrap().parent().unwrap().to_path_buf();
-    path.push("test_site");
+    let path = test_site_path("test_site");
     let config_file = path.join("config.toml");
     let mut site = Site::new(&path, config_file).unwrap();
     site.load().unwrap();
-    let library = site.library.read().unwrap();
 
     // The config has a global default author set.
     let author = site.config.author;
     assert_eq!(Some("config@example.com (Config Author)".to_string()), author);
 
     let posts_path = path.join("content").join("posts");
-    let posts_section = library.sections.get(&posts_path.join("_index.md")).unwrap();
+    let posts_section = site.library.sections.get(&posts_path.join("_index.md")).unwrap();
 
-    let p1 = &library.pages[&posts_section.pages[0]];
-    let p2 = &library.pages[&posts_section.pages[1]];
+    let p1 = &site.library.pages[&posts_section.pages[0]];
+    let p2 = &site.library.pages[&posts_section.pages[1]];
 
     // Only the first page has had an author added.
     assert_eq!(1, p1.meta.authors.len());
-    assert_eq!("page@example.com (Page Author)", p1.meta.authors.get(0).unwrap());
+    assert_eq!("page@example.com (Page Author)", p1.meta.authors.first().unwrap());
     assert_eq!(0, p2.meta.authors.len());
 }
 

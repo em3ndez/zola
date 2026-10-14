@@ -1,16 +1,16 @@
-use std::fs::create_dir_all;
+use fs_err as fs;
 use std::path::{Path, PathBuf};
 
-use libs::globset::Glob;
-use libs::grass::{from_path as compile_file, Options, OutputStyle};
-use libs::walkdir::{DirEntry, WalkDir};
+use globset::Glob;
+use grass::{Options, OutputStyle, from_path as compile_file};
+use walkdir::{DirEntry, WalkDir};
 
 use crate::anyhow;
-use errors::{bail, Result};
-use utils::fs::{create_file, ensure_directory_exists};
+use errors::{Result, bail};
+use utils::fs::{create_directory, create_file};
 
 pub fn compile_sass(base_path: &Path, output_path: &Path) -> Result<()> {
-    ensure_directory_exists(output_path)?;
+    create_directory(output_path)?;
 
     let sass_path = {
         let mut sass_path = PathBuf::from(base_path);
@@ -30,7 +30,7 @@ pub fn compile_sass(base_path: &Path, output_path: &Path) -> Result<()> {
         let css_output_path = output_path.join(path_inside_sass).with_extension("css");
 
         if parent_inside_sass.is_some() {
-            create_dir_all(css_output_path.parent().unwrap())?;
+            fs::create_dir_all(css_output_path.parent().unwrap())?;
         }
 
         create_file(&css_output_path, &css)?;

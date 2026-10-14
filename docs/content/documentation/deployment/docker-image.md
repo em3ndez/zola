@@ -11,7 +11,7 @@ Here is an example that builds the current folder, and put the result in a docke
 Of course, you may want to replace the second stage with another static web server like Nginx or Apache.
 
 ```Dockerfile
-FROM ghcr.io/getzola/zola:v0.17.1 as zola
+FROM ghcr.io/getzola/zola:v0.22.1 AS zola
 
 COPY . /project
 WORKDIR /project
@@ -23,13 +23,14 @@ COPY --from=zola /project/public /public
 ```
 
 To build your website as a docker image, you then run:
-```shell
+
+```bash
 docker build -t my_website:latest .
 ```
 
 To test your site, just run the docker image and browse [http://localhost:8000](http://localhost:8000)
 
-```
+```bash
 docker run --rm -p 8000:80 my_website:latest
 ```
 

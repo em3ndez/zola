@@ -1,8 +1,6 @@
 ---
-source: components/rendering/tests/markdown.rs
-assertion_line: 79
+source: components/markdown/tests/markdown.rs
 expression: body
-
 ---
 <h1 id="hello-1">Hello</h1>
 <h1 id="hello-2">Hello</h1>
@@ -15,13 +13,12 @@ expression: body
 <h1 id=""></h1>
 <h1 id="-1"></h1>
 <h1 id="about"><a href="https://getzola.org/about/">About</a></h1>
-<h1 id="rust"><a href="https://rust-lang.org" title="Rust homepage">Rust</a></h1>
+<h1 id="rust"><a rel="external" title="Rust homepage" href="https://rust-lang.org">Rust</a></h1>
 <h1 id="hi"><code>hi</code></h1>
 <h1 id="hi-1"><em>hi</em></h1>
 <h1 id="hi-2"><strong>hi</strong></h1>
 <h1 id="text-there">text <sup class="footnote-reference"><a href="#1">1</a></sup> there</h1>
 <div class="footnote-definition" id="1"><sup class="footnote-definition-label">1</sup>
 <p>footnote</p>
-<h1 id="classes" class="bold another">Classes</h1>
 </div>
-
+<h1 id="classes" class="bold another">Classes</h1>

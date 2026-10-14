@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 
-use libs::tera::Tera;
-
+use ahash::AHashMap;
 use config::Config;
-use markdown::{render_content, RenderContext};
+use markdown::{MarkdownContext, render_content};
 use templates::ZOLA_TERA;
 use utils::slugs::SlugifyStrategy;
 use utils::types::InsertAnchor;
@@ -108,21 +107,44 @@ fn can_insert_anchors() {
 
 #[test]
 fn can_customise_anchor_template() {
-    let mut tera = Tera::default();
-    tera.extend(&ZOLA_TERA).unwrap();
+    let mut tera = ZOLA_TERA.clone();
     tera.add_raw_template("anchor-link.html", " (in {{ lang }})").unwrap();
     let permalinks_ctx = HashMap::new();
     let config = Config::default_for_test();
-    let context = RenderContext::new(
-        &tera,
-        &config,
-        &config.default_language,
-        "",
-        &permalinks_ctx,
-        InsertAnchor::Right,
-    );
+    let colocated_assets = AHashMap::new();
+    let context = MarkdownContext {
+        tera: &tera,
+        config: &config,
+        permalinks: &permalinks_ctx,
+        colocated_assets: &colocated_assets,
+        lang: &config.default_language,
+        current_permalink: "",
+        current_path: "",
+        insert_anchor: InsertAnchor::Right,
+    };
     let body = render_content("# Hello", &context).unwrap().body;
     insta::assert_snapshot!(body);
+}
+
+#[test]
+fn can_customise_summary_template() {
+    let mut tera = ZOLA_TERA.clone();
+    tera.add_raw_template("summary-cutoff.html", " (in {{ lang }})").unwrap();
+    let permalinks_ctx = HashMap::new();
+    let config = Config::default_for_test();
+    let colocated_assets = AHashMap::new();
+    let context = MarkdownContext {
+        tera: &tera,
+        config: &config,
+        permalinks: &permalinks_ctx,
+        colocated_assets: &colocated_assets,
+        lang: &config.default_language,
+        current_permalink: "",
+        current_path: "",
+        insert_anchor: InsertAnchor::Right,
+    };
+    let summary = render_content("Hello <!-- more --> World!", &context).unwrap().summary.unwrap();
+    insta::assert_snapshot!(summary);
 }
 
 #[test]
@@ -134,36 +156,82 @@ fn can_use_smart_punctuation() {
 }
 
 #[test]
+fn can_use_definition_list() {
+    let mut config = Config::default_for_test();
+    config.markdown.definition_list = true;
+    let content = r#"
+term
+: definition
+    "#;
+    let body = common::render_with_config(content, config).unwrap().body;
+    insta::assert_snapshot!(body);
+}
+
+#[test]
+fn can_use_external_links_class() {
+    let mut config = Config::default_for_test();
+
+    // external link class only
+    config.markdown.external_links_class = Some("external".to_string());
+    let body = common::render_with_config("<https://google.com>", config.clone()).unwrap().body;
+    insta::assert_snapshot!("external_link_class", body);
+
+    // internal link (should not add class)
+    let body =
+        common::render_with_config("[about](@/pages/about.md)", config.clone()).unwrap().body;
+    insta::assert_snapshot!("internal_link_no_class", body);
+
+    // reset class, set target blank only
+    config.markdown.external_links_class = None;
+    config.markdown.external_links_target_blank = true;
+    let body = common::render_with_config("<https://google.com>", config.clone()).unwrap().body;
+    insta::assert_snapshot!("external_link_no_class_and_target_blank", body);
+
+    // both class and target blank
+    config.markdown.external_links_class = Some("external".to_string());
+    let body = common::render_with_config("<https://google.com>", config).unwrap().body;
+    insta::assert_snapshot!("external_link_class_and_target_blank", body);
+}
+
+#[test]
 fn can_use_external_links_options() {
     let mut config = Config::default_for_test();
 
-    // no options
+    // default options (rel=external only)
     let body = common::render("<https://google.com>").unwrap().body;
-    insta::assert_snapshot!(body);
+    insta::assert_snapshot!("external_link_default_options", body);
 
     // target blank
+    config.markdown.external_links_external = false;
     config.markdown.external_links_target_blank = true;
     let body = common::render_with_config("<https://google.com>", config.clone()).unwrap().body;
-    insta::assert_snapshot!(body);
+    insta::assert_snapshot!("external_link_target_blank", body);
 
     // no follow
     config.markdown.external_links_target_blank = false;
     config.markdown.external_links_no_follow = true;
     let body = common::render_with_config("<https://google.com>", config.clone()).unwrap().body;
-    insta::assert_snapshot!(body);
+    insta::assert_snapshot!("external_link_no_follow", body);
 
     // no referrer
     config.markdown.external_links_no_follow = false;
     config.markdown.external_links_no_referrer = true;
     let body = common::render_with_config("<https://google.com>", config.clone()).unwrap().body;
-    insta::assert_snapshot!(body);
+    insta::assert_snapshot!("external_link_no_referrer", body);
+
+    // external
+    config.markdown.external_links_no_referrer = false;
+    config.markdown.external_links_external = true;
+    let body = common::render_with_config("<https://google.com>", config.clone()).unwrap().body;
+    insta::assert_snapshot!("external_link_external", body);
 
     // all of them
     config.markdown.external_links_no_follow = true;
     config.markdown.external_links_target_blank = true;
     config.markdown.external_links_no_referrer = true;
+    config.markdown.external_links_external = true;
     let body = common::render_with_config("<https://google.com>", config).unwrap().body;
-    insta::assert_snapshot!(body);
+    insta::assert_snapshot!("external_link_all_options", body);
 }
 
 #[test]
@@ -353,5 +421,68 @@ and multiple paragraphs.
     )
     .unwrap()
     .body;
+    insta::assert_snapshot!(body);
+}
+
+#[test]
+fn github_style_footnotes() {
+    let mut config = Config::default_for_test();
+    config.markdown.bottom_footnotes = true;
+
+    let markdown = r#"This text has a footnote[^1]
+
+[^1]:But it is meaningless.
+
+This text has two[^3] footnotes[^2].
+
+[^2]: not sorted.
+[^3]: But they are
+
+[^4]:It's before the reference.
+
+There is footnote definition?[^4]
+
+This text has two[^5] identical footnotes[^5]
+[^5]: So one is present.
+[^6]: But another in not.
+
+This text has a footnote[^7]
+
+[^7]: But the footnote has another footnote[^8].
+
+[^8]: That's it.
+
+Footnotes can also be referenced with identifiers[^first].
+
+[^first]: Like this: `[^first]`.
+"#;
+
+    let body = common::render_with_config(&markdown, config).unwrap().body;
+    insta::assert_snapshot!(body);
+}
+
+#[test]
+fn github_alerts() {
+    let mut config = Config::default_for_test();
+    config.markdown.github_alerts = true;
+
+    let markdown = r#"
+> [!NOTE]  
+> alert note
+
+> [!TIP]
+> alert tip
+
+> [!IMPORTANT]  
+> alert important
+
+> [!WARNING]  
+> alert warning
+
+> [!CAUTION]
+> alert caution
+"#;
+
+    let body = common::render_with_config(&markdown, config).unwrap().body;
     insta::assert_snapshot!(body);
 }

@@ -21,44 +21,17 @@ Your website is now built and deployed to Cloudflare's network! You can add a cu
 You may find documentation and guides like [Getting started with Cloudflare Pages](https://developers.cloudflare.com/pages/getting-started) and
 [Deploying Zola with Cloudflare Pages](https://developers.cloudflare.com/pages/how-to/deploy-a-zola-site#deploying-with-cloudflare-pages) in the Developers portal.
 
-## Troubleshooting
+## Handling preview deployments
 
-Some tips to help troubleshoot issues getting started with Cloudflare Pages.
+When working with Cloudflare Pages, you'll often use preview deployments for testing changes before merging to your main branch. By default, these preview deployments use different URLs (like `https://your-branch-name.your-project.pages.dev`), which can cause issues with asset loading if your `base_url` is hardcoded in your `zola.toml`.
 
-### `zola: not found`
-
-If you see build output that resembles something like this:
+To fix this, modify your build command in the Cloudflare Pages configuration to dynamically set the base URL depending on the environment:
 
 ```sh
-23:03:54.609	> build
-23:03:54.609	> zola build $BUILD_OPTS && npx tailwindcss -i ./public/input.css -o ./public/style.css -m
-23:03:54.609
-23:03:54.621	sh: 1: zola: not found
-23:03:54.635	Failed: Error while executing user command. Exited with error code: 127
-23:03:54.644	Failed: build command exited with code: 1
-23:03:55.699	Failed: error occurred while running build command
+if [ "$CF_PAGES_BRANCH" = "main" ]; then zola build; else zola build --base-url $CF_PAGES_URL; fi
 ```
 
-Then it might be due to an [outstanding issue](https://github.com/cloudflare/pages-build-image/issues/3#issuecomment-1646873666). There are currently two recommended workarounds:
+This command:
 
-#### Change the **build system version** to `v1`
-
-From within the workers & pages dash, go to the following:
-<Your Project> Settings > Builds & deployments > Build system version > Configure build system
-
-Then select `v1` and save.
-
-#### Or use `UNSTABLE_PRE_BUILD` environment variable + `asdf`
-
-From within the workers & pages dash, do the following:
-<Your Project> Settings > Environment variables > Edit variables
-
-And add an environment variable `UNSTABLE_PRE_BUILD`, with the following value and save.
-
-```sh
-asdf plugin add zola https://github.com/salasrod/asdf-zola && asdf install zola 0.18.0 && asdf global zola 0.18.0
-```
-
-
-
-
+- Uses your `zola.toml` `base_url` when building from the main branch
+- Uses the preview deployment URL (automatically provided by Cloudflare Pages as `$CF_PAGES_URL`) for all other branches

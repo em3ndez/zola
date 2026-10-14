@@ -19,7 +19,13 @@ Any non-Markdown file in a section directory is added to the `assets` collection
 Markdown file using relative links.
 
 ## Drafting
-Just like pages sections can be drafted by setting the `draft` option in the front matter. By default this is not done. When a section is drafted it's descendants like pages, subsections and assets will not be processed unless the `--drafts` flag is passed. Note that even pages that don't have a `draft` status will not be processed if one of their parent sections is drafted.
+
+Just like pages, sections can be drafted by setting the `draft` option in
+the front matter, which is unset (`false`) by default.  When a section is
+drafted, its descendants (such as pages, subsections and assets) will **not**
+be processed unless the `--drafts` flag is passed.  Note that pages will not be
+processed if any of their parent sections is drafted, regardless of their own
+`draft` status.
 
 ## Front matter
 
@@ -63,7 +69,7 @@ template = "section.html"
 # will always use the closest to itself.
 # However, a page's own `template` variable will always have priority.
 # Not set by default.
-page_template =
+# page_template =
 
 # This sets the number of pages to be displayed per paginated page.
 # No pagination will happen if this isn't set or if the value is 0.
@@ -73,7 +79,7 @@ paginate_by = 0
 # The default is page/1.
 paginate_path = "page"
 
-# If set, there will pagination will happen in a reversed order.
+# If set, pagination will happen in a reversed order.
 paginate_reversed = false
 
 # This determines whether to insert a link for each header like the ones you can see on this site if you hover over
@@ -95,7 +101,7 @@ render = true
 # Useful for the same reason as `render` but when you don't want a 404 when
 # landing on the root section page.
 # Example: redirect_to = "documentation/content/overview"
-redirect_to =
+# redirect_to =
 
 # If set to "true", the section will pass its pages on to the parent section. Defaults to `false`.
 # Useful when the section shouldn't split up the parent section, like
@@ -106,11 +112,15 @@ transparent = false
 # current one. This takes an array of paths, not URLs.
 aliases = []
 
-# If set to "true", a feed file will be generated for this section at the
+# If set to "true", feed files will be generated for this section at the
 # section's root path. This is independent of the site-wide variable of the same
 # name. The section feed will only include posts from that respective feed, and
 # not from any other sections, including sub-sections under that section.
-generate_feed = false
+generate_feeds = false
+
+# When set to `true`, the section will be rendered but will not be included in the parent subsection/sitemap/feeds/search/etc
+# By default it applies to all children of this section but each of them can opt out by setting their own hidden property
+hidden = false
 
 # Your own data.
 [extra]
@@ -135,17 +145,20 @@ example: a `blog` directory with three files: `blog/Post_1.md`,
 `blog/Post_2.md` and `blog/Post_3.md`.  To iterate over these posts and
 create a list of links to the posts, a simple template might look like this:
 
-```j2
+```jinja
+{% raw -%}
 {% for post in section.pages %}
   <h1><a href="{{ post.permalink }}">{{ post.title }}</a></h1>
 {% endfor %}
+{%- endraw %}
 ```
 
 This would iterate over the posts in the order specified
 by the `sort_by` variable set in the `_index.md` page for the corresponding
 section.  The `sort_by` variable can be given a few values: `date`, `update_date`
-`title`, `title_bytes`, `weight`, `slug` or `none`.  If `sort_by` is not set, the pages will be
-sorted in the `none` order, which is not intended for sorted content.
+`title`, `title_bytes`, `weight`, `slug`, `permalink` or `none`.  If `sort_by`
+is not set, the pages will be sorted in the `none` order, which is not intended
+for sorted content.
 
 Any page that is missing the data it needs to be sorted will be ignored and
 won't be rendered. For example, if a page is missing the date variable and its
@@ -160,9 +173,9 @@ The `sort_by` front-matter variable can have the following values:
 
 ### `date`
 This will sort all pages by their `date` field, from the most recent (at the
-top of the list) to the oldest (at the bottom of the list). Each page will
-get `page.lower` and `page.higher` variables that contain the pages with
-earlier and later dates, respectively.
+top of the list) to the oldest (at the bottom of the list). Each page will get
+`page.higher` and `page.lower` variables that contain the pages with earlier and
+later dates, respectively.
 
 ### `update_date`
 Same as `date` except it will take into account any `updated` date for the pages.
@@ -196,6 +209,10 @@ pages with lighter and heavier weights, respectively.
 ### `slug`
 This will sort pages or sections by their slug in natural lexical order.
 
+### `permalink`
+Similar to `slug`, this will sort pages or sections by their permalink in natural lexical order.
+Useful if you set the `path` key on your pages.
+
 ### Reversed sorting
 When iterating through pages, you may wish to use the Tera `reverse` filter,
 which reverses the order of the pages.  For example, after using the `reverse` filter,
@@ -208,16 +225,12 @@ to newest (at the bottom).
 If the section is paginated the `paginate_reversed=true` in the front matter of the relevant section should be set instead of using the filter.
 
 ## Sorting subsections
-Sorting sections is a bit less flexible: sections can only be sorted by `weight`,
-and do not have variables that point to the heavier/lighter sections.
+Sorting sections is a bit less flexible: sections can only be sorted by `weight`, `title` and `permalink`. Similarly to pages, section have `section.lower` and `section.higher`
+variables, pointing to the heavier/lighter sections.
 
 By default, the lightest (lowest `weight`) subsections will be at
 the top of the list and the heaviest (highest `weight`) will be at the bottom;
 the `reverse` filter reverses this order.
 
-**Note**: Unlike pages, permalinks will **not** be used to break ties between
-equally weighted sections. Thus, if the `weight` variable for your section is not set (or if it
-is set in a way that produces ties), then your sections will be sorted in
-**random** order. Moreover, that order is determined at build time and will
-change with each site rebuild.  Thus, if there is any chance that you will
-iterate over your sections, you should always assign them distinct weights.
+**Note**: A section's "transparency" doesn't apply to subsections, so subsections
+will not be visible as direct children of the parent section.

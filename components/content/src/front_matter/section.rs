@@ -1,18 +1,18 @@
-use libs::tera::{Map, Value};
 use serde::{Deserialize, Serialize};
+use tera::{Map, Value};
 
+use super::extra::{default_extra, deserialize_extra};
 use errors::Result;
-use utils::de::fix_toml_dates;
 use utils::types::InsertAnchor;
 
-use crate::front_matter::split::RawFrontMatter;
 use crate::SortBy;
+use crate::front_matter::split::RawFrontMatter;
 
-static DEFAULT_PAGINATE_PATH: &str = "page";
+const DEFAULT_PAGINATE_PATH: &str = "page";
 
 /// The front matter of every section
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct SectionFrontMatter {
     /// <title> of the page
     pub title: Option<String>,
@@ -41,7 +41,7 @@ pub struct SectionFrontMatter {
     pub paginate_path: String,
     /// Whether to insert a link for each header like the ones you can see in this site if you hover one
     /// The default template can be overridden by creating a `anchor-link.html` in the `templates` directory
-    pub insert_anchor_links: InsertAnchor,
+    pub insert_anchor_links: Option<InsertAnchor>,
     /// Whether to render that section or not. Defaults to `true`.
     /// Useful when the section is only there to organize things but is not meant
     /// to be used directly, like a posts section in a personal site
@@ -69,29 +69,24 @@ pub struct SectionFrontMatter {
     pub aliases: Vec<String>,
     /// Whether to generate a feed for the current section
     #[serde(skip_serializing)]
-    pub generate_feed: bool,
+    pub generate_feeds: bool,
+    /// Whether to hide this section and the subsections/pages everywhere but still render them
+    /// Pages and subsections can override it by setting their own `hidden` field
+    #[serde(skip_serializing)]
+    pub hidden: Option<bool>,
     /// Any extra parameter present in the front matter
-    pub extra: Map<String, Value>,
+    #[serde(default = "default_extra", deserialize_with = "deserialize_extra")]
+    pub extra: Value,
 }
 
 impl SectionFrontMatter {
     pub fn parse(raw: &RawFrontMatter) -> Result<SectionFrontMatter> {
-        let mut f: SectionFrontMatter = raw.deserialize()?;
-
-        f.extra = match fix_toml_dates(f.extra) {
-            Value::Object(o) => o,
-            _ => unreachable!("Got something other than a table in section extra"),
-        };
-
-        Ok(f)
+        raw.deserialize()
     }
 
     /// Only applies to section, whether it is paginated or not.
     pub fn is_paginated(&self) -> bool {
-        match self.paginate_by {
-            Some(v) => v > 0,
-            None => false,
-        }
+        self.paginate_by.is_some_and(|v| v > 0)
     }
 }
 
@@ -108,13 +103,14 @@ impl Default for SectionFrontMatter {
             paginate_path: DEFAULT_PAGINATE_PATH.to_string(),
             render: true,
             redirect_to: None,
-            insert_anchor_links: InsertAnchor::None,
+            insert_anchor_links: None,
             in_search_index: true,
             transparent: false,
             page_template: None,
             aliases: Vec::new(),
-            generate_feed: false,
-            extra: Map::new(),
+            generate_feeds: false,
+            hidden: None,
+            extra: Value::from(Map::new()),
             draft: false,
         }
     }

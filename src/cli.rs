@@ -1,18 +1,24 @@
+use std::net::IpAddr;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use clap_complete::Shell;
 
 #[derive(Parser)]
-#[clap(version, author, about)]
+#[clap(
+    version,
+    author,
+    about,
+    after_help = "License: EUPL-1.2 <https://eupl.eu>, MIT for code existing before 0.22"
+)]
 pub struct Cli {
     /// Directory to use as root of project
     #[clap(short = 'r', long, default_value = ".")]
     pub root: PathBuf,
 
-    /// Path to a config file other than config.toml in the root of project
-    #[clap(short = 'c', long, default_value = "config.toml")]
-    pub config: PathBuf,
+    /// Path to a config file other than zola.toml or config.toml in the root of project
+    #[clap(short = 'c', long)]
+    pub config: Option<PathBuf>,
 
     #[clap(subcommand)]
     pub command: Command,
@@ -33,7 +39,7 @@ pub enum Command {
 
     /// Deletes the output directory if there is one and builds the site
     Build {
-        /// Force the base URL to be that value (defaults to the one in config.toml)
+        /// Force the base URL to be that value (defaults to the one in the config file)
         #[clap(short = 'u', long)]
         base_url: Option<String>,
 
@@ -48,13 +54,17 @@ pub enum Command {
         /// Include drafts when loading the site
         #[clap(long)]
         drafts: bool,
+
+        /// Minify generated HTML files
+        #[clap(long)]
+        minify: bool,
     },
 
     /// Serve the site. Rebuild and reload on change automatically
     Serve {
         /// Interface to bind on
         #[clap(short = 'i', long, default_value = "127.0.0.1")]
-        interface: String,
+        interface: IpAddr,
 
         /// Which port to use
         #[clap(short = 'p', long, default_value_t = 1111)]
@@ -70,8 +80,8 @@ pub enum Command {
         force: bool,
 
         /// Changes the base_url
-        #[clap(short = 'u', long, default_value = "127.0.0.1")]
-        base_url: String,
+        #[clap(short = 'u', long)]
+        base_url: Option<String>,
 
         /// Include drafts when loading the site
         #[clap(long)]
@@ -81,6 +91,10 @@ pub enum Command {
         #[clap(short = 'O', long)]
         open: bool,
 
+        /// Also store HTML in the public/ folder (by default HTML is only stored in-memory)
+        #[clap(long)]
+        store_html: bool,
+
         /// Only rebuild the minimum on change - useful when working on a specific page/section
         #[clap(short = 'f', long)]
         fast: bool,
@@ -88,6 +102,14 @@ pub enum Command {
         /// Default append port to the base url.
         #[clap(long)]
         no_port_append: bool,
+
+        /// Extra path to watch for changes, relative to the project root.
+        #[clap(long)]
+        extra_watch_path: Vec<String>,
+
+        /// Debounce time in milliseconds for the file watcher (at least 1ms)
+        #[clap(short = 'd', long, default_value_t = 1000, value_parser = clap::value_parser!(u64).range(1..))]
+        debounce: u64,
     },
 
     /// Try to build the project without rendering it. Checks links
@@ -95,6 +117,9 @@ pub enum Command {
         /// Include drafts when loading the site
         #[clap(long)]
         drafts: bool,
+        /// Skip external links
+        #[clap(long)]
+        skip_external_links: bool,
     },
 
     /// Generate shell completion

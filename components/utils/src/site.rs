@@ -1,7 +1,7 @@
-use libs::percent_encoding::percent_decode;
+use percent_encoding::percent_decode;
 use std::collections::HashMap;
 
-use errors::{anyhow, Result};
+use errors::{Result, anyhow};
 
 /// Result of a successful resolution of an internal link.
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -21,7 +21,7 @@ pub fn resolve_internal_link(
     link: &str,
     permalinks: &HashMap<String, String>,
 ) -> Result<ResolvedInternalLink> {
-    // First we remove the ./ since that's zola specific
+    // First we remove the @/ since that's zola specific
     let clean_link = link.replacen("@/", "", 1);
     // Then we remove any potential anchor
     // parts[0] will be the file path and parts[1] the anchor if present
@@ -88,7 +88,7 @@ mod tests {
     }
 
     #[test]
-    fn errors_resolve_inexistant_internal_link() {
+    fn errors_resolve_inexistent_internal_link() {
         let res = resolve_internal_link("@/pages/about.md#hello", &HashMap::new());
         assert!(res.is_err());
     }

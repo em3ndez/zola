@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use errors::{bail, Result};
+use errors::{Result, bail};
 
 /// Takes a full path to a file and returns only the components after the first `content` directory
 /// Will not return the filename as last component
@@ -71,7 +71,7 @@ impl FileInfo {
         // If we have a folder with an asset, don't consider it as a component
         // Splitting on `.` as we might have a language so it isn't *only* index but also index.fr
         // etc
-        if !components.is_empty() && name.split('.').collect::<Vec<_>>()[0] == "index" {
+        if !components.is_empty() && name.split('.').next().unwrap() == "index" {
             colocated_path = Some({
                 let mut val = components.join("/");
                 val.push('/');
@@ -110,6 +110,16 @@ impl FileInfo {
         };
         let grand_parent = parent.parent().map(|p| p.to_path_buf());
 
+        // If the section has a folder with assets, expose its colocated path like pages do
+        let mut colocated_path = None;
+        if !components.is_empty() && name.split('.').next().unwrap() == "_index" {
+            colocated_path = Some({
+                let mut val = components.join("/");
+                val.push('/');
+                val
+            });
+        }
+
         FileInfo {
             filename: file_path.file_name().unwrap().to_string_lossy().to_string(),
             path: file_path,
@@ -119,7 +129,7 @@ impl FileInfo {
             name,
             components,
             relative,
-            colocated_path: None,
+            colocated_path,
         }
     }
 
@@ -144,15 +154,14 @@ impl FileInfo {
         // We can document that
         let mut parts: Vec<String> = self.name.splitn(2, '.').map(|s| s.to_string()).collect();
 
-        // If language code is same as default language, go for default
-        if default_language == parts[1].as_str() {
-            return Ok(default_language.to_owned());
-        }
-
-        // The language code is not present in the config: typo or the user forgot to add it to the
-        // config
-        if !other_languages.contains(&parts[1].as_ref()) {
-            bail!("File {:?} has a language code of {} which isn't present in the config.toml `languages`", self.path, parts[1]);
+        // The language code is not the default and is not present in the config: typo or the user
+        // forgot to add it to the config
+        if default_language != parts[1].as_str() && !other_languages.contains(&parts[1].as_ref()) {
+            bail!(
+                "File {:?} has a language code of {} which isn't present in the config.toml `languages`",
+                self.path,
+                parts[1]
+            );
         }
 
         self.name = parts.swap_remove(0);
@@ -167,7 +176,7 @@ impl FileInfo {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{find_content_components, FileInfo};
+    use super::{FileInfo, find_content_components};
 
     #[test]
     fn can_find_content_components() {
@@ -184,6 +193,26 @@ mod tests {
         );
         assert_eq!(file.components, ["posts".to_string(), "tutorials".to_string()]);
         assert_eq!(file.colocated_path, Some("posts/tutorials/python/".to_string()));
+    }
+
+    #[test]
+    fn can_find_colocated_path_in_section_with_assets() {
+        let file = FileInfo::new_section(
+            Path::new("/home/vincent/code/site/content/posts/tutorials/_index.md"),
+            &PathBuf::new(),
+        );
+        assert_eq!(file.components, ["posts".to_string(), "tutorials".to_string()]);
+        assert_eq!(file.colocated_path, Some("posts/tutorials/".to_string()));
+        assert_eq!(file.relative, "posts/tutorials/_index.md".to_string());
+    }
+
+    #[test]
+    fn section_colocated_path_with_language() {
+        let file = FileInfo::new_section(
+            Path::new("/home/vincent/code/site/content/posts/tutorials/_index.fr.md"),
+            &PathBuf::new(),
+        );
+        assert_eq!(file.colocated_path, Some("posts/tutorials/".to_string()));
     }
 
     #[test]
@@ -215,6 +244,8 @@ mod tests {
         let res = file.find_language("en", &["fr"]);
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "en");
+        // https://github.com/getzola/zola/issues/1437
+        assert_eq!(file.name, "python");
     }
 
     #[test]
